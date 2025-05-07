@@ -1,0 +1,19 @@
+tokenization:
+  base_url: "https://<host>/vts/rest/v2.0"
+  token_group: "ctsdemo_group"
+  token_template: "Template_Alpha"
+  tokenize_user: "Token_User"
+  tokenize_password: "*********"
+
+database:
+  host: "localhost"
+  port: 5432
+  user: "postgres"
+  password: "postgres"
+  dbname: "postgres"
+  sslmode: "disable"
+
+migration:
+  table: "mock_cc"
+  id_field: "id"
+  target_field: "cc_number"
