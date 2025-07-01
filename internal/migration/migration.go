@@ -4,6 +4,7 @@ import (
 	"batch-data-migration/config"
 	"batch-data-migration/internal/db"
 	"batch-data-migration/pkg/tokenizer"
+	"database/sql"
 	"fmt"
 	"log"
 	"os"
@@ -66,53 +67,105 @@ func RunMigration() {
 	offset := 0
 	for {
 		// Menarik data sesuai batch
-		query := fmt.Sprintf("SELECT %s, %s FROM %s ORDER BY %s LIMIT $1 OFFSET $2", idField, targetField, table, idField)
-		rows, err := conn.Query(query, batchSize, offset)
+		var query string
+		var rows *sql.Rows
+		var err error
+
+		if config.AppConfig.Database.Type == "postgres" {
+			// PostgreSQL syntax with LIMIT/OFFSET
+			query = fmt.Sprintf("SELECT %s, %s FROM %s ORDER BY %s LIMIT $1 OFFSET $2", idField, targetField, table, idField)
+			rows, err = conn.Query(query, batchSize, offset)
+		} else {
+			// SQL Server syntax with OFFSET/FETCH
+			query = fmt.Sprintf("SELECT %s, %s FROM %s ORDER BY %s OFFSET %d ROWS FETCH NEXT %d ROWS ONLY",
+				idField, targetField, table, idField, offset, batchSize)
+			rows, err = conn.Query(query)
+		}
+
 		if err != nil {
 			logger.Fatal("Error querying data:", err)
 		}
 
-		var count int
+		type DataRow struct {
+			ID       int
+			CCNumber string
+		}
+
+		var dataRows []DataRow
 		for rows.Next() {
 			var id int
 			var ccNumber string
 
 			if err := rows.Scan(&id, &ccNumber); err != nil {
-				logger.Println("Error scanning row:", err)
-				continue
+				rows.Close()
+				logger.Fatal("Error scanning row:", err)
 			}
 
-			// Melakukan tokenisasi pada ccNumber
-			token, err := helper.Tokenize(ccNumber)
-			if err != nil {
-				logger.Printf("Error tokenizing cc_number %s: %v\n", ccNumber, err)
-				continue
-			}
-
-			// Update data dengan token hasil tokenisasi
-			updateQuery := fmt.Sprintf("UPDATE %s SET %s = $1 WHERE %s = $2", table, targetField, idField)
-			_, err = conn.Exec(updateQuery, token, id)
-			if err != nil {
-				logger.Printf("Error updating token for id %d: %v\n", id, err)
-				continue
-			}
-
-			// Menyimpan pesan "Row ID ... updated successfully" hanya ke log
-			logMessage := fmt.Sprintf("Row ID %d updated successfully", id)
-			logger.Println(logMessage)
-
-			// Menampilkan progress bar
-			bar.Add(1)
-			count++
+			dataRows = append(dataRows, DataRow{ID: id, CCNumber: ccNumber})
 		}
-
 		rows.Close()
 
-		// Jika jumlah data yang diambil kurang dari batchSize, migrasi selesai
-		if count < batchSize {
+		// If no rows returned, we're done
+		if len(dataRows) == 0 {
 			break
 		}
-		offset += batchSize
+
+		// Extract credit card numbers for batch tokenization
+		var ccNumbers []string
+		for _, row := range dataRows {
+			ccNumbers = append(ccNumbers, row.CCNumber)
+		}
+
+		// Tokenize in batch
+		tokens, err := helper.TokenizeBatch(ccNumbers)
+		if err != nil {
+			logger.Fatal("Error tokenizing batch:", err)
+		}
+
+		// Begin a transaction for batch update
+		tx, err := conn.Begin()
+		if err != nil {
+			logger.Fatal("Error starting transaction:", err)
+		}
+
+		// Prepare the update statement
+		var updateStmt *sql.Stmt
+		if config.AppConfig.Database.Type == "postgres" {
+			updateStmt, err = tx.Prepare(fmt.Sprintf("UPDATE %s SET %s = $1 WHERE %s = $2", table, targetField, idField))
+		} else {
+			// For SQL Server, use @ parameters instead of ?
+			updateStmt, err = tx.Prepare(fmt.Sprintf("UPDATE %s SET %s = @p1 WHERE %s = @p2", table, targetField, idField))
+		}
+
+		if err != nil {
+			tx.Rollback()
+			logger.Fatal("Error preparing update statement:", err)
+		}
+
+		// Update each row with its token
+		for i, row := range dataRows {
+			if i < len(tokens) {
+				_, err := updateStmt.Exec(tokens[i], row.ID)
+				if err != nil {
+					tx.Rollback()
+					logger.Fatal("Error updating row:", err)
+				}
+
+				// Log update success
+				logger.Printf("Row ID %d updated successfully", row.ID)
+
+				// Update progress bar
+				bar.Add(1)
+			}
+		}
+
+		// Commit the transaction
+		if err := tx.Commit(); err != nil {
+			logger.Fatal("Error committing transaction:", err)
+		}
+
+		// Move to next batch
+		offset += len(dataRows)
 	}
 
 	// Menyimpan waktu selesai eksekusi

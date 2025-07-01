@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"log"
 	"os"
 
@@ -16,12 +17,15 @@ type TokenizationConfig struct {
 }
 
 type DatabaseConfig struct {
-	Host     string `yaml:"host"`
-	Port     int    `yaml:"port"`
-	User     string `yaml:"user"`
-	Password string `yaml:"password"`
-	DBName   string `yaml:"dbname"`
-	SSLMode  string `yaml:"sslmode"`
+	Type                   string `yaml:"type"` // postgres atau mssql
+	Host                   string `yaml:"host"`
+	Port                   int    `yaml:"port"`
+	User                   string `yaml:"user"`
+	Password               string `yaml:"password"`
+	DBName                 string `yaml:"dbname"`
+	SSLMode                string `yaml:"sslmode"`                  // Hanya untuk PostgreSQL
+	Instance               string `yaml:"instance"`                 // Hanya untuk MS SQL Server
+	TrustServerCertificate bool   `yaml:"trust_server_certificate"` // Hanya untuk MS SQL Server
 }
 
 type MigrationConfig struct {
@@ -39,6 +43,7 @@ type Config struct {
 var AppConfig *Config
 
 func LoadConfig(path string) {
+	fmt.Printf("Loading configuration from: %s\n", path)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		log.Fatalf("Failed to read config file: %v", err)
@@ -49,4 +54,8 @@ func LoadConfig(path string) {
 		log.Fatalf("Failed to unmarshal config: %v", err)
 	}
 	AppConfig = &cfg
+
+	// Tambahkan log untuk memastikan nilai konfigurasi
+	fmt.Printf("Loaded Database Config: Host=%s, Port=%d, User=%s, DBName=%s\n",
+		AppConfig.Database.Host, AppConfig.Database.Port, AppConfig.Database.User, AppConfig.Database.DBName)
 }

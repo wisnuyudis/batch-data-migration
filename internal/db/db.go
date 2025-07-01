@@ -6,18 +6,43 @@ import (
 
 	"batch-data-migration/config" // import package config
 
-	_ "github.com/lib/pq"
+	_ "github.com/denisenkom/go-mssqldb" // Driver untuk MS SQL Server
 )
 
-// ConnectDB untuk menghubungkan ke PostgreSQL menggunakan konfigurasi yang sudah dimuat
+// ConnectDB untuk menghubungkan ke PostgreSQL atau MS SQL Server menggunakan konfigurasi yang sudah dimuat
 func ConnectDB() (*sql.DB, error) {
 	// Ambil konfigurasi database dari AppConfig
 	dbConfig := config.AppConfig.Database
-	connStr := fmt.Sprintf("user=%s dbname=%s password=%s host=%s port=%d sslmode=%s",
-		dbConfig.User, dbConfig.DBName, dbConfig.Password, dbConfig.Host, dbConfig.Port, dbConfig.SSLMode)
 
-	// Membuka koneksi ke database PostgreSQL
-	db, err := sql.Open("postgres", connStr)
+	var connStr string
+	var driverName string
+
+	if dbConfig.Type == "postgres" {
+		// Koneksi untuk PostgreSQL
+		connStr = fmt.Sprintf("user=%s dbname=%s password=%s host=%s port=%d sslmode=%s",
+			dbConfig.User, dbConfig.DBName, dbConfig.Password, dbConfig.Host, dbConfig.Port, dbConfig.SSLMode)
+		driverName = "postgres"
+	} else if dbConfig.Type == "mssql" {
+		// Koneksi untuk MS SQL Server
+		// Fix: Gunakan server= format yang benar untuk MS SQL Server
+		connStr = fmt.Sprintf("server=%s;user id=%s;password=%s;port=%d;database=%s;encrypt=false;TrustServerCertificate=%t",
+			dbConfig.Host, dbConfig.User, dbConfig.Password, dbConfig.Port, dbConfig.DBName, dbConfig.TrustServerCertificate)
+
+		if dbConfig.Instance != "" {
+			connStr = fmt.Sprintf("%s;instance=%s", connStr, dbConfig.Instance)
+		}
+
+		driverName = "sqlserver"
+
+		// Debug connection string (tanpa password)
+		fmt.Printf("Connection string: server=%s;user id=%s;port=%d;database=%s\n",
+			dbConfig.Host, dbConfig.User, dbConfig.Port, dbConfig.DBName)
+	} else {
+		return nil, fmt.Errorf("unsupported database type: %s", dbConfig.Type)
+	}
+
+	// Membuka koneksi ke database
+	db, err := sql.Open(driverName, connStr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %v", err)
 	}
@@ -28,6 +53,9 @@ func ConnectDB() (*sql.DB, error) {
 		return nil, fmt.Errorf("failed to ping database: %v", err)
 	}
 
+	fmt.Printf("Database Host: %s\n", dbConfig.Host)
+	fmt.Printf("Database Config: Host=%s, Port=%d, User=%s, DBName=%s, Type=%s\n",
+		dbConfig.Host, dbConfig.Port, dbConfig.User, dbConfig.DBName, dbConfig.Type)
 	fmt.Println("Connected to the database successfully!")
 	return db, nil
 }
